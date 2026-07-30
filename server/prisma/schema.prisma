@@ -11,6 +11,9 @@
 
 generator client {
   provider = "prisma-client-js"
+  // `rhel-openssl-3.0.x` is the query engine Vercel's Node runtime needs; without
+  // it the function starts and then fails on its first query.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {

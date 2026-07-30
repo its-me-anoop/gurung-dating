@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run vercel-build",
+  "outputDirectory": "web/dist",
+  "functions": {
+    "api/[[...path]].ts": {
+      "maxDuration": 20,
+      "includeFiles": "server/prisma/**"
+    }
+  },
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}

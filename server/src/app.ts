@@ -4,6 +4,7 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { env } from './config/env.js';
+import { runtime } from './lib/runtime.js';
 import { attachUser, touchActivity } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { generalLimiter } from './middleware/rateLimit.js';
@@ -31,14 +32,24 @@ export function createApp(): Express {
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );
+  // The delegate form is used so the request's own host can be consulted: when
+  // the SPA is served from the same deployment as the API (as it is on Vercel,
+  // where the hostname is only known at runtime), the origin is trivially
+  // allowed without having to enumerate every preview URL.
   app.use(
-    cors({
-      origin: (origin, callback) => {
-        // Same-origin and server-to-server calls arrive without an Origin header.
-        if (!origin || env.corsOrigins.includes(origin)) return callback(null, true);
-        callback(new Error(`Origin ${origin} is not allowed`));
-      },
-      credentials: true,
+    cors((req, callback) => {
+      const origin = req.headers.origin;
+      const sameOrigin =
+        origin !== undefined && req.headers.host !== undefined
+          ? origin === `https://${req.headers.host}` || origin === `http://${req.headers.host}`
+          : false;
+
+      // Same-origin and server-to-server calls arrive without an Origin header.
+      const allowed = !origin || sameOrigin || env.corsOrigins.includes(origin);
+      callback(allowed ? null : new Error(`Origin ${origin} is not allowed`), {
+        origin: allowed,
+        credentials: true,
+      });
     }),
   );
 
@@ -55,7 +66,14 @@ export function createApp(): Express {
   app.use(touchActivity);
 
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'tamu-sansar-api', time: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      service: 'tamu-sansar-api',
+      // `ephemeral` means this instance is running against a scratch copy of the
+      // seeded database that resets on cold start — see lib/runtime.ts.
+      storage: runtime.storage,
+      time: new Date().toISOString(),
+    });
   });
 
   app.use('/api/auth', authRouter);

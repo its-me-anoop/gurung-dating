@@ -13,6 +13,7 @@
     "db:setup": "prisma generate && prisma db push --skip-generate && npm run seed",
     "db:reset": "prisma db push --force-reset --skip-generate && npm run seed",
     "seed": "tsx prisma/seed.ts",
+    "build:preview-db": "prisma generate && DATABASE_URL=file:./preview.db prisma db push --skip-generate && DATABASE_URL=file:./preview.db tsx prisma/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
