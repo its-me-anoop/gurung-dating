@@ -1,0 +1,20 @@
+{
+  "name": "gurung-dating",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tamu Sansar — matrimony and dating platform for the Gurung (Tamu) community in the United Kingdom",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=server & npm run dev --workspace=web",
+    "build": "npm run build --workspace=server && npm run build --workspace=web",
+    "test": "npm run test --workspace=server",
+    "lint": "npm run lint --workspace=server && npm run lint --workspace=web",
+    "setup": "npm install && npm run db:setup --workspace=server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
