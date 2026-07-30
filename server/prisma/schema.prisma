@@ -73,7 +73,10 @@ model Session {
   ipAddress        String?
   expiresAt        DateTime
   revokedAt        DateTime?
-  createdAt        DateTime @default(now())
+  /// The session that replaced this one during rotation. Lets a refresh that
+  /// lost a race be told apart from a stolen token being replayed.
+  replacedById String?
+  createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

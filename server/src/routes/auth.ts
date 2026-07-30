@@ -43,7 +43,7 @@ async function issueSession(
   meta: { userAgent?: string; ip?: string },
 ) {
   const { token, hash } = generateRefreshToken();
-  await prisma.session.create({
+  const session = await prisma.session.create({
     data: {
       userId,
       refreshTokenHash: hash,
@@ -52,7 +52,11 @@ async function issueSession(
       expiresAt: refreshTokenExpiry(),
     },
   });
-  return { refreshToken: token, accessToken: signAccessToken({ sub: userId, email, role }) };
+  return {
+    refreshToken: token,
+    sessionId: session.id,
+    accessToken: signAccessToken({ sub: userId, email, role }),
+  };
 }
 
 const registerSchema = z.object({
@@ -182,6 +186,19 @@ authRouter.post(
 );
 
 /**
+ * How long after rotation a superseded refresh token is still tolerated.
+ *
+ * Rotation creates a race: two tabs (or two requests that both hit a just-expired
+ * access token) can send the same refresh token at once. One wins, revokes it and
+ * gets a replacement; the other arrives moments later holding a token that is now
+ * revoked. Without a grace window that second request signs the member out for no
+ * reason. Within the window — and only if the winner's replacement is still live —
+ * we hand back an access token and leave the cookie alone, so the browser keeps the
+ * one good refresh token.
+ */
+const REFRESH_GRACE_MS = 30_000;
+
+/**
  * Rotates the refresh token: the presented one is revoked and a fresh one
  * issued, so a stolen token stops working as soon as the real member refreshes.
  */
@@ -198,7 +215,7 @@ authRouter.post(
       include: { user: true },
     });
 
-    if (!session || session.revokedAt || session.expiresAt < new Date()) {
+    if (!session || session.expiresAt < new Date()) {
       clearRefreshCookie(res);
       throw unauthorized('Your session has expired. Please sign in again.');
     }
@@ -207,28 +224,60 @@ authRouter.post(
       throw unauthorized('This account is suspended.');
     }
 
-    await prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
-    });
+    const userPayload = {
+      id: session.user.id,
+      email: session.user.email,
+      role: session.user.role,
+      status: session.user.status,
+    };
 
-    const { accessToken, refreshToken } = await issueSession(
+    if (session.revokedAt) {
+      const successor = session.replacedById
+        ? await prisma.session.findUnique({ where: { id: session.replacedById } })
+        : null;
+      const successorLive =
+        successor && !successor.revokedAt && successor.expiresAt > new Date();
+      const withinGrace = Date.now() - session.revokedAt.getTime() < REFRESH_GRACE_MS;
+
+      if (withinGrace && successorLive) {
+        // Lost a rotation race. Issue an access token but do not touch the
+        // cookie — the winner already replaced it with a live token.
+        res.json({
+          accessToken: signAccessToken({
+            sub: session.userId,
+            email: session.user.email,
+            role: session.user.role,
+          }),
+          user: userPayload,
+        });
+        return;
+      }
+
+      // A refresh token presented well after it was retired is the signature of
+      // a replayed or stolen token. Assume the worst and end every session for
+      // this account, so whoever holds the copy gets nothing.
+      await prisma.session.updateMany({
+        where: { userId: session.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      clearRefreshCookie(res);
+      throw unauthorized('Your session has expired. Please sign in again.');
+    }
+
+    const { accessToken, refreshToken, sessionId } = await issueSession(
       session.userId,
       session.user.email,
       session.user.role,
       { userAgent: req.headers['user-agent'], ip: req.ip },
     );
-    setRefreshCookie(res, refreshToken);
 
-    res.json({
-      accessToken,
-      user: {
-        id: session.user.id,
-        email: session.user.email,
-        role: session.user.role,
-        status: session.user.status,
-      },
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { revokedAt: new Date(), replacedById: sessionId },
     });
+
+    setRefreshCookie(res, refreshToken);
+    res.json({ accessToken, user: userPayload });
   }),
 );
 

@@ -149,21 +149,74 @@ describe('sign in', () => {
 describe('tokens', () => {
   beforeEach(resetDatabase);
 
-  it('rotates the refresh token and revokes the one presented', async () => {
+  it('rotates the refresh token, issuing a different one each time', async () => {
     const member = await createMember();
     const login = await request(app)
       .post('/api/auth/login')
       .send({ email: member.email, password: PASSWORD });
 
-    const cookie = login.headers['set-cookie'];
+    const cookie = login.headers['set-cookie'] as unknown as string[];
     const refresh = await request(app).post('/api/auth/refresh').set('Cookie', cookie);
 
     expect(refresh.status).toBe(200);
     expect(refresh.body.accessToken).toBeTruthy();
 
-    // The original cookie must not work a second time.
+    const rotated = refresh.headers['set-cookie'] as unknown as string[];
+    expect(rotated).toBeTruthy();
+    expect(rotated[0]).not.toBe(cookie[0]);
+
+    // The old session row is retired and points at its replacement.
+    const revoked = await prisma.session.findFirst({
+      where: { userId: member.userId, revokedAt: { not: null } },
+    });
+    expect(revoked?.replacedById).toBeTruthy();
+  });
+
+  it('tolerates two refreshes racing on the same token', async () => {
+    // Two tabs, or two requests that both hit an expired access token, will
+    // send the same refresh cookie at once. Neither should be signed out.
+    const member = await createMember();
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ email: member.email, password: PASSWORD });
+    const cookie = login.headers['set-cookie'];
+
+    const first = await request(app).post('/api/auth/refresh').set('Cookie', cookie);
+    const second = await request(app).post('/api/auth/refresh').set('Cookie', cookie);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(second.body.accessToken).toBeTruthy();
+
+    // Only the winner rotated the cookie; the straggler leaves it alone so the
+    // browser keeps the one live token.
+    expect(first.headers['set-cookie']).toBeTruthy();
+    expect(second.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('treats a long-retired token as a replay and ends every session', async () => {
+    const member = await createMember();
+    const login = await request(app)
+      .post('/api/auth/login')
+      .send({ email: member.email, password: PASSWORD });
+    const cookie = login.headers['set-cookie'];
+
+    await request(app).post('/api/auth/refresh').set('Cookie', cookie);
+
+    // Push the revocation outside the grace window.
+    await prisma.session.updateMany({
+      where: { userId: member.userId, revokedAt: { not: null } },
+      data: { revokedAt: new Date(Date.now() - 5 * 60_000) },
+    });
+
     const replay = await request(app).post('/api/auth/refresh').set('Cookie', cookie);
     expect(replay.status).toBe(401);
+
+    // Everything is torn down, so a stolen copy gets nothing either.
+    const live = await prisma.session.findMany({
+      where: { userId: member.userId, revokedAt: null },
+    });
+    expect(live).toHaveLength(0);
   });
 
   it('rejects a request with no token', async () => {
