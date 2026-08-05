@@ -1,0 +1,108 @@
+@import 'tailwindcss';
+
+/**
+ * The palette leans on colours that read as celebratory in Nepali culture —
+ * a deep crimson for anything that carries weight, marigold as the accent —
+ * set against a warm paper background rather than the cold grey-white that
+ * most dating products default to. The intent is a site that feels closer to
+ * a community hall than to a swiping app.
+ */
+@theme {
+  --color-crimson-50: #fdf2f4;
+  --color-crimson-100: #fce7ea;
+  --color-crimson-200: #f9d0d8;
+  --color-crimson-300: #f3a9b8;
+  --color-crimson-400: #ea7592;
+  --color-crimson-500: #dc4670;
+  --color-crimson-600: #c62a58;
+  --color-crimson-700: #a41d47;
+  --color-crimson-800: #8a1b40;
+  --color-crimson-900: #761a3b;
+  --color-crimson-950: #41081c;
+
+  --color-marigold-50: #fefaec;
+  --color-marigold-100: #fbf1ca;
+  --color-marigold-200: #f7e190;
+  --color-marigold-300: #f3cb56;
+  --color-marigold-400: #f0b52e;
+  --color-marigold-500: #e99516;
+  --color-marigold-600: #ce7110;
+  --color-marigold-700: #ab4f11;
+  --color-marigold-800: #8b3e15;
+  --color-marigold-900: #733314;
+
+  --color-paper-50: #fdfbf7;
+  --color-paper-100: #faf6ee;
+  --color-paper-200: #f2ebdc;
+  --color-paper-300: #e7dbc4;
+  --color-paper-400: #d6c3a1;
+  --color-paper-500: #c2a87d;
+
+  --color-ink-50: #f6f6f5;
+  --color-ink-100: #e7e6e4;
+  --color-ink-200: #d0cecb;
+  --color-ink-300: #b0ada8;
+  --color-ink-400: #8a8681;
+  --color-ink-500: #6f6b66;
+  --color-ink-600: #595551;
+  --color-ink-700: #494643;
+  --color-ink-800: #3d3b39;
+  --color-ink-900: #2a2827;
+  --color-ink-950: #1a1918;
+
+  --font-display: 'Georgia', 'Iowan Old Style', 'Times New Roman', serif;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-paper-50 text-ink-800 font-sans antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display text-ink-900;
+  }
+
+  /* Visible focus for keyboard users on every interactive element. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-crimson-600;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-paper-300 bg-white shadow-sm;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink-700;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-paper-300 bg-white px-3.5 py-2.5 text-ink-900
+           placeholder:text-ink-300 focus:border-crimson-500 focus:ring-2 focus:ring-crimson-100
+           focus:outline-none disabled:bg-paper-100 disabled:text-ink-400;
+  }
+
+  .hint {
+    @apply mt-1.5 text-xs text-ink-500;
+  }
+}
+
+/* Respect a user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

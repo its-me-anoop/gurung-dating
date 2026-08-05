@@ -1,0 +1,443 @@
+// Tamu Sansar — data model
+//
+// Target engine is SQLite so the whole stack runs with zero external services.
+// SQLite has no native enum or array types, so:
+//   * enum-like columns are `String` and validated at the edge by zod schemas
+//     in `src/domain/*` (single source of truth for the allowed values), and
+//   * list-valued columns are `String` holding a JSON array, always read and
+//     written through the helpers in `src/lib/json.ts`.
+// Swapping to Postgres later means changing the datasource and promoting those
+// columns to real enums / `String[]`; nothing else in the app depends on it.
+
+generator client {
+  provider = "prisma-client-js"
+  // `rhel-openssl-3.0.x` is the query engine Vercel's Node runtime needs; without
+  // it the function starts and then fails on its first query.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  passwordHash String
+
+  /// MEMBER | MODERATOR | ADMIN
+  role String @default("MEMBER")
+  /// PENDING_VERIFICATION | ACTIVE | SUSPENDED | DEACTIVATED
+  status String @default("PENDING_VERIFICATION")
+
+  emailVerifiedAt        DateTime?
+  emailVerificationToken String?   @unique
+  passwordResetToken     String?   @unique
+  passwordResetExpiresAt DateTime?
+
+  lastActiveAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile        Profile?
+  sessions       Session[]
+  sentInterests     Interest[] @relation("InterestSender")
+  receivedInterests Interest[] @relation("InterestReceiver")
+  shortlistsMade    Shortlist[] @relation("ShortlistOwner")
+  shortlistedBy     Shortlist[] @relation("ShortlistTarget")
+  blocksMade        Block[]     @relation("BlockOwner")
+  blockedBy         Block[]     @relation("BlockTarget")
+  reportsMade       Report[]    @relation("Reporter")
+  reportsAgainst    Report[]    @relation("Reported")
+  reportsResolved   Report[]    @relation("ReportResolver")
+  messages          Message[]
+  conversationsA    Conversation[] @relation("ConversationMemberA")
+  conversationsB    Conversation[] @relation("ConversationMemberB")
+  viewsMade         ProfileView[]  @relation("Viewer")
+  viewsReceived     ProfileView[]  @relation("Viewed")
+  notifications     Notification[]
+
+  @@index([status])
+  @@index([lastActiveAt])
+}
+
+/// Refresh-token family. One row per signed-in device; revoking a row signs
+/// that device out without touching the others.
+model Session {
+  id               String   @id @default(cuid())
+  userId           String
+  refreshTokenHash String   @unique
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  /// The session that replaced this one during rotation. Lets a refresh that
+  /// lost a race be told apart from a stolen token being replayed.
+  replacedById String?
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Profiles
+// ---------------------------------------------------------------------------
+
+model Profile {
+  id     String @id @default(cuid())
+  userId String @unique
+
+  // --- Identity ------------------------------------------------------------
+  displayName String
+  /// MALE | FEMALE
+  gender      String
+  dateOfBirth DateTime
+  heightCm    Int?
+  /// NEVER_MARRIED | DIVORCED | WIDOWED | SEPARATED | ANNULLED
+  maritalStatus String @default("NEVER_MARRIED")
+  hasChildren   Boolean @default(false)
+  /// LIVING_WITH_ME | NOT_LIVING_WITH_ME | null
+  childrenLivingStatus String?
+
+  // --- Tamu (Gurung) heritage ---------------------------------------------
+  /// GURUNG | PART_GURUNG | OTHER_NEPALI | NOT_NEPALI
+  ///
+  /// Stated separately from `clan` because they answer different questions.
+  /// Someone can be Gurung and not yet have filled in their thar, and the site
+  /// is open to members from the wider Nepali community and to partners from
+  /// outside it — the "Gurung heritage only" preference filters on this field,
+  /// never on whether a profile happens to be finished.
+  heritage String @default("GURUNG")
+  /// Clan / thar slug. See src/domain/gurung.ts for the reference list.
+  clan String?
+  /// Maternal clan (mama-ko thar). Used for the exogamy advisory.
+  motherClan String?
+  /// CHAR_JAT | SOHRA_JAT | OTHER — derived from `clan`, denormalised for filters.
+  clanGroup String?
+  /// Ancestral district in Nepal (slug), e.g. `lamjung`.
+  ancestralDistrict String?
+  /// BUDDHIST | HINDU | BON | CHRISTIAN | SPIRITUAL | NONE | OTHER
+  religion String?
+  /// Slug of the language spoken at home.
+  motherTongue String?
+  /// NATIVE | CONVERSATIONAL | BASIC | NONE — spoken Tamu Kyi.
+  gurungFluency String?
+  /// JSON array of language slugs.
+  languages String @default("[]")
+
+  // --- Life in the UK ------------------------------------------------------
+  /// UK region slug, e.g. `greater-london`.
+  ukRegion String?
+  city     String?
+  /// Outward postcode only (e.g. "SW19") — never the full postcode.
+  postcodeArea String?
+  /// BRITISH_CITIZEN | SETTLED | PRE_SETTLED | SKILLED_WORKER | STUDENT | DEPENDANT | OTHER
+  residencyStatus String?
+  yearsInUk       Int?
+  /// Where the member grew up: UK | NEPAL | HONG_KONG | BRUNEI | INDIA | OTHER
+  raisedIn String?
+  /// Whether a Gurkha/service family background applies — a common shared thread
+  /// in the UK community and a frequent conversation starter.
+  serviceFamily Boolean @default(false)
+  willingToRelocate Boolean @default(false)
+
+  // --- Education & work ----------------------------------------------------
+  /// SECONDARY | COLLEGE | BACHELORS | MASTERS | DOCTORATE | PROFESSIONAL | OTHER
+  education     String?
+  fieldOfStudy  String?
+  occupation    String?
+  /// UNDER_25K | K25_40 | K40_60 | K60_85 | K85_120 | OVER_120K | PREFER_NOT_TO_SAY
+  incomeBand    String?
+  /// EMPLOYED | SELF_EMPLOYED | STUDENT | BETWEEN_ROLES | NOT_WORKING | RETIRED
+  employmentStatus String?
+
+  // --- Lifestyle -----------------------------------------------------------
+  /// OMNIVORE | NO_BEEF | EGGETARIAN | VEGETARIAN | VEGAN
+  diet     String?
+  /// NEVER | OCCASIONALLY | SOCIALLY | REGULARLY
+  smoking  String?
+  drinking String?
+
+  // --- Family --------------------------------------------------------------
+  /// NUCLEAR | JOINT | LIVING_ALONE
+  familyType   String?
+  /// TRADITIONAL | MODERATE | LIBERAL
+  familyValues String?
+  fatherOccupation String?
+  motherOccupation String?
+  brothers Int?
+  sisters  Int?
+  /// Where the member's family is based, free text (e.g. "Aldershot, Hampshire").
+  familyBasedIn String?
+
+  // --- Words ---------------------------------------------------------------
+  headline String?
+  about    String?
+  /// JSON array of free-text interest tags.
+  interests  String @default("[]")
+  lookingFor String?
+
+  // --- Intent & visibility -------------------------------------------------
+  /// MARRIAGE | SERIOUS_RELATIONSHIP | FRIENDSHIP_FIRST — a member may be here
+  /// for a traditional match, for dating, or open to both.
+  intent String @default("MARRIAGE")
+  /// PUBLIC | MEMBERS_ONLY | CONNECTIONS_ONLY
+  visibility String @default("MEMBERS_ONLY")
+  /// Set when the member (or a guardian) manages the profile on someone's behalf:
+  /// SELF | PARENT | SIBLING | RELATIVE | FRIEND
+  profileManagedBy String @default("SELF")
+
+  /// Verified by a moderator (ID check).
+  verified     Boolean @default(false)
+  verifiedAt   DateTime?
+  /// 0-100, recomputed on every write. Drives the "complete your profile" nudge
+  /// and acts as a tiebreaker in discovery ranking.
+  completeness Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preference Preference?
+  photos     Photo[]
+
+  @@index([gender, ukRegion])
+  @@index([clan])
+  @@index([dateOfBirth])
+  @@index([visibility])
+}
+
+/// What a member is looking for. Every field is optional — an empty preference
+/// means "no filter", and scoring treats it as neutral rather than as a miss.
+model Preference {
+  id        String @id @default(cuid())
+  profileId String @unique
+
+  ageMin      Int?
+  ageMax      Int?
+  heightMinCm Int?
+  heightMaxCm Int?
+
+  /// JSON arrays of accepted values (empty array = open to all).
+  maritalStatuses   String @default("[]")
+  religions         String @default("[]")
+  ukRegions         String @default("[]")
+  educationLevels   String @default("[]")
+  diets             String @default("[]")
+  residencyStatuses String @default("[]")
+  ancestralDistricts String @default("[]")
+  clanGroups        String @default("[]")
+  intents           String @default("[]")
+
+  /// NEVER | OCCASIONALLY | SOCIALLY | REGULARLY — the most a member will accept.
+  maxSmoking  String?
+  maxDrinking String?
+
+  /// Only show members of Gurung heritage. On by default; members who are happy
+  /// to meet outside the community can switch it off.
+  gurungHeritageOnly Boolean @default(true)
+  /// Hide profiles sharing the member's clan (or maternal clan). Reflects the
+  /// customary preference for marrying outside one's own thar.
+  observeClanExogamy Boolean @default(true)
+  /// Only show profiles a moderator has ID-verified.
+  verifiedOnly Boolean @default(false)
+  /// Only show members whose family is also in the UK.
+  ukBasedFamilyOnly Boolean @default(false)
+
+  maxDistanceMiles Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+}
+
+model Photo {
+  id String @id @default(cuid())
+  /// Points at `Profile.userId` (which is unique), so a photo row carries the
+  /// owning user id directly — handy, because every access check is about the
+  /// user — while still hanging off the profile for cascade and includes.
+  userId String
+  /// Path relative to the uploads root, served through /api/photos/:id/file.
+  storageKey String
+  /// Small inline JPEG data URI used as a blur-up placeholder.
+  thumbnail  String?
+  caption    String?
+  isPrimary  Boolean @default(false)
+  /// EVERYONE | MEMBERS | CONNECTIONS — connections-only photos unlock once an
+  /// interest is mutual.
+  visibility String @default("MEMBERS")
+  /// PENDING | APPROVED | REJECTED — new uploads wait for moderation.
+  moderationStatus String @default("PENDING")
+  moderationNote   String?
+  position   Int @default(0)
+  width      Int?
+  height     Int?
+  bytes      Int?
+  createdAt  DateTime @default(now())
+
+  profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, position])
+}
+
+// ---------------------------------------------------------------------------
+// Connections
+// ---------------------------------------------------------------------------
+
+/// An expression of interest. Mutual acceptance opens a conversation.
+model Interest {
+  id         String @id @default(cuid())
+  senderId   String
+  receiverId String
+  /// PENDING | ACCEPTED | DECLINED | WITHDRAWN
+  status  String @default("PENDING")
+  message String?
+  respondedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sender   User @relation("InterestSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("InterestReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId, status])
+  @@index([senderId, status])
+}
+
+model Shortlist {
+  id       String @id @default(cuid())
+  ownerId  String
+  targetId String
+  note     String?
+  createdAt DateTime @default(now())
+
+  owner  User @relation("ShortlistOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  target User @relation("ShortlistTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, targetId])
+  @@index([ownerId])
+}
+
+model Block {
+  id       String @id @default(cuid())
+  ownerId  String
+  targetId String
+  reason   String?
+  createdAt DateTime @default(now())
+
+  owner  User @relation("BlockOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  target User @relation("BlockTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, targetId])
+  @@index([targetId])
+}
+
+model ProfileView {
+  id       String @id @default(cuid())
+  viewerId String
+  viewedId String
+  viewedAt DateTime @default(now())
+
+  viewer User @relation("Viewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  viewed User @relation("Viewed", fields: [viewedId], references: [id], onDelete: Cascade)
+
+  @@unique([viewerId, viewedId])
+  @@index([viewedId, viewedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Messaging
+// ---------------------------------------------------------------------------
+
+/// Exactly one conversation per pair. `memberAId` is always the lexicographically
+/// smaller user id so the pair has a single canonical row.
+model Conversation {
+  id        String @id @default(cuid())
+  memberAId String
+  memberBId String
+
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  aLastReadAt        DateTime?
+  bLastReadAt        DateTime?
+  /// Set when either side closes the conversation; blocks new messages.
+  closedAt   DateTime?
+  closedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberA  User      @relation("ConversationMemberA", fields: [memberAId], references: [id], onDelete: Cascade)
+  memberB  User      @relation("ConversationMemberB", fields: [memberBId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([memberAId, memberBId])
+  @@index([lastMessageAt])
+}
+
+model Message {
+  id             String @id @default(cuid())
+  conversationId String
+  senderId       String
+  body           String
+  readAt         DateTime?
+  /// Soft delete — the row stays so the other side's history is intact.
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Safety & housekeeping
+// ---------------------------------------------------------------------------
+
+model Report {
+  id         String @id @default(cuid())
+  reporterId String
+  reportedId String
+  /// FAKE_PROFILE | HARASSMENT | INAPPROPRIATE_PHOTO | SCAM | UNDERAGE | OTHER
+  reason  String
+  details String?
+  /// OPEN | REVIEWING | ACTIONED | DISMISSED
+  status     String @default("OPEN")
+  resolution String?
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt DateTime @default(now())
+
+  reporter   User  @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported   User  @relation("Reported", fields: [reportedId], references: [id], onDelete: Cascade)
+  resolvedBy User? @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  /// INTEREST_RECEIVED | INTEREST_ACCEPTED | NEW_MESSAGE | PROFILE_VIEW |
+  /// PHOTO_APPROVED | PHOTO_REJECTED | PROFILE_VERIFIED | SYSTEM
+  type String
+  title String
+  body  String?
+  /// Optional in-app link, e.g. `/messages/<id>`.
+  link   String?
+  readAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}

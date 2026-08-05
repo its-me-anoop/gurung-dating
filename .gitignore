@@ -1,0 +1,38 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.local
+*.local
+
+# SQLite databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+server/prisma/*.db*
+
+# Uploaded media
+server/uploads/
+!server/uploads/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Vite
+web/dist/
+.vite/
+
+# Vercel
+.vercel/
+server/prisma/preview.db
